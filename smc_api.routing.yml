@@ -1,0 +1,57 @@
+smc_api.weekly_events:
+  path: '/%jsonapi%/weekly-events/{date}/{page}'
+  defaults:
+    _jsonapi_resource: Drupal\smc_api\Resource\WeeklyEvents
+    page: 0
+  requirements:
+    _permission: 'access content'
+smc_api.list_events:
+  path: '/%jsonapi%/list-events/{date}/{page}'
+  defaults:
+    _jsonapi_resource: Drupal\smc_api\Resource\ListEvents
+    page: 0
+  requirements:
+    _permission: 'access content'
+smc_api.jackpot:
+  path: '/%jsonapi%/jackpot/{gameid}'
+  defaults:
+    _jsonapi_resource: Drupal\smc_api\Resource\Jackpot
+    gameid: 0
+  requirements:
+    _permission: 'access content'
+smc_api.bus_tracker:
+  path: '/%jsonapi%/bus-tracker/{address}/{radius}'
+  defaults:
+    _jsonapi_resource: Drupal\smc_api\Resource\BusTracker
+  requirements:
+    _permission: 'access content'
+
+smc_api.settings:
+  path: 'admin/config/smc-api'
+  defaults:
+    _controller: '\Drupal\system\Controller\SystemController::systemAdminMenuBlockPage'
+    _title: 'SMC API Settings'
+  requirements:
+    _permission: 'administer site configuration'
+  options:
+    _admin_route: TRUE
+
+smc_api.jackpot_settings:
+  path: 'admin/config/smc-api/jackpot-settings'
+  defaults:
+    _form: 'Drupal\smc_api\Form\JackpotSettingsForm'
+    _title: 'Jackpot API Settings'
+  requirements:
+    _permission: 'administer site configuration'
+  options:
+    _admin_route: TRUE
+
+smc_api.menu_settings:
+  path: 'admin/config/smc-api/menu-settings'
+  defaults:
+    _form: 'Drupal\smc_api\Form\MenuSettingsForm'
+    _title: 'Menu API Settings'
+  requirements:
+    _permission: 'administer site configuration'
+  options:
+    _admin_route: TRUE

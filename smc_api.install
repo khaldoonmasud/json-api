@@ -1,0 +1,82 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the smc_api module.
+ */
+
+use Drupal\smc_api\FieldStorageDefinition;
+use Drupal\smc_api\Field\Filters;
+use Drupal\smc_api\Field\CountdownDate;
+
+/**
+ * Add Listing Grid paragraph filters field definitions.
+ */
+function smc_api_update_8001() {
+  $filters = [
+    'event_type' => 'Event Type',
+    'game' => 'Game',
+    'game_type' => 'Game Type',
+    'promotion_type' => 'Promotion Type',
+    'venue_type' => 'Venue Type',
+    'venue' => 'Venue',
+  ];
+  foreach ($filters as $field_name => $field_label) {
+    $name = 'field_filter_' . $field_name;
+    $fields[$name] = FieldStorageDefinition::create('string')
+      ->setLabel(t($field_label))
+      ->setDescription(t('This is filter computed property.'))
+      ->setComputed(TRUE)
+      ->setClass(Filters::class)
+      ->setReadOnly(FALSE)
+      ->setInternal(FALSE)
+      ->setDisplayOptions('view', [
+        'label' => 'hidden',
+        'region' => 'hidden',
+        'weight' => -5,
+      ])
+      ->setDisplayOptions('form', [
+        'label' => 'hidden',
+        'region' => 'hidden',
+        'weight' => -5,
+      ])
+      ->setTargetEntityTypeId('paragraph')
+      ->setTargetBundle('listing_grid')
+      ->setName($name)
+      ->setDisplayConfigurable('form', FALSE)
+      ->setDisplayConfigurable('view', FALSE);
+
+    \Drupal::service('field_definition.listener')->onFieldDefinitionCreate($fields[$name]);
+  }
+}
+
+/**
+ * Add Hero countdown date field definition.
+ */
+function smc_api_update_8002() {
+  $name = 'field_countdown_date';
+  $fields[$name] = FieldStorageDefinition::create('string')
+    ->setLabel(t('Countdown date'))
+    ->setDescription(t('This is countdown date computed property.'))
+    ->setComputed(TRUE)
+    ->setClass(CountdownDate::class)
+    ->setReadOnly(FALSE)
+    ->setInternal(FALSE)
+    ->setDisplayOptions('view', [
+      'label' => 'hidden',
+      'region' => 'hidden',
+      'weight' => -5,
+    ])
+    ->setDisplayOptions('form', [
+      'label' => 'hidden',
+      'region' => 'hidden',
+      'weight' => -5,
+    ])
+    ->setTargetEntityTypeId('paragraph')
+    ->setTargetBundle('hero')
+    ->setName($name)
+    ->setDisplayConfigurable('form', FALSE)
+    ->setDisplayConfigurable('view', FALSE);
+
+  \Drupal::service('field_definition.listener')->onFieldDefinitionCreate($fields[$name]);
+}

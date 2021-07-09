@@ -1,0 +1,25 @@
+/* Hides the ends field for recurring dates in the sidebar widget countdown */
+div[data-drupal-selector*="-subform-field-recurring-0"] .dates .date:nth-child(1) {
+  display: none;
+}
+
+/* Hides the timezone field for recurring dates in the sidebar widget countdown */
+/*div[class*="-field-recurring-0-time-zone"] {
+  display: none;
+}*/
+
+/* Hides the timezone field for the event date in Event content type*/
+/*div[class*="-event-date-0-time-zone"] {
+  display: none;
+}*/
+
+/* Hides the Header Link field for Simple Text Header Component */
+div[data-drupal-selector*="-subform-field-section-details"][id*='subform-field-header-link'] {
+  display: none;
+}
+
+/* Hides the Header Link field for Simple Text Header Component */
+div[id*="-subform-field-menu-0-subform-field-header-link-"] {
+  display: none;
+}
+

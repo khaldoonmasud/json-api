@@ -1,0 +1,19 @@
+services:
+  # SMC API routing
+  smc_api.routing.mapper:
+    class: '\Drupal\smc_api\Routing\RouteMapper'
+    arguments: ['@path_alias.manager', '@config.factory']
+    tags:
+      - { name: http_middleware, priority: 201 }
+  smc_api.response:
+    class: Drupal\smc_api\EventSubscriber\ResponseSubscriber
+    arguments: []
+    tags:
+      - { name: event_subscriber }
+    calls:
+      - [setConfig, ['@config.factory']]
+      - [setJsonapiInclude, ['@jsonapi_include.parse']]
+      - [setRouteMatch, ['@current_route_match']]
+  smc_api.menu_service_consumer:
+    class: '\Drupal\smc_api\Services\MenuServiceConsumer'
+    arguments: ['@http_client', '@config.factory']

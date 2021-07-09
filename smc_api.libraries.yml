@@ -1,0 +1,9 @@
+global:
+  css:
+    theme:
+      css/smc_api.css: {}
+  js:
+    js/smc_api.js: {}
+  dependencies:
+    - core/drupal
+    - core/jquery

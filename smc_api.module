@@ -1,0 +1,898 @@
+<?php
+
+/**
+ * @file
+ */
+
+use Drupal\smc_api\Field\Filters;
+use Drupal\smc_api\Field\CountdownDate;
+use Drupal\smc_api\Field\ Menu;
+use Drupal\Core\Entity\EntityTypeInterface;
+use Drupal\Core\Field\WidgetBase;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\smc_api\FieldStorageDefinition;
+use Drupal\user\UserInterface;
+use Drupal\Core\Field\BaseFieldDefinition;
+use Drupal\Core\Field\FieldStorageDefinitionInterface;
+use Drupal\smc_api\Field\SignInForm;
+use Drupal\smc_api\Field\UserLoggedIn;
+
+$_smc_api_cache_tags = [];
+
+/**
+ * Implements hook_form_alter().
+ */
+function smc_api_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  switch ($form_id) {
+    case 'node_page_form':
+    case 'node_event_form':
+    case 'node_game_form':
+    case 'node_promotion_form':
+    case 'node_venue_form':
+    case 'node_winner_form':
+    case 'node_page_edit_form':
+    case 'node_event_edit_form':
+    case 'node_game_edit_form':
+    case 'node_promotion_edit_form':
+    case 'node_venue_edit_form':
+    case 'node_winner_edit_form':
+      $form['#validate'][] = 'smc_api_listing_grid_validate';
+      $form['#attached']['library'][] = 'smc_api/global';
+      break;
+
+    case 'node_menus_form':
+    case 'node_menus_edit_form':
+      $form['#validate'][] = 'smc_api_menus_validate';
+      break;
+
+    case 'openid_connect_login_form':
+      $form['#submit'][] = 'smc_api_openid_connect_submit';
+      break;
+  }
+}
+
+/**
+ * Implements hook_form_submit().
+ */
+function smc_api_openid_connect_submit($form, FormStateInterface $form_state) {
+  // Set custom destination path for open id logins.
+  if (isset($_SESSION['openid_connect_destination'])) {
+    $request = \Drupal::request();
+    if ($request->headers->has('referer')) {
+      $parse = pathinfo($request->headers->get('referer'));
+      $_SESSION['openid_connect_destination'] = [$parse['basename']];
+    }
+
+  }
+
+}
+
+/**
+ * Validates Menus Content Type components.
+ *
+ * @param $element
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ */
+function smc_api_menus_validate(&$form, FormStateInterface $form_state) {
+  $form_values = $form_state->getValues();
+  $field_header_component = $form_values['field_header_component'];
+
+  $enabled_signin = $field_header_component[0]['subform']['field_enable_sign_in'][0]['value'] ?? 0;
+  if ($enabled_signin) {
+    $form_state->setValue([
+      'field_header_component',
+      0,
+      'subform',
+      'field_submenu_footer_sublink',
+      0,
+      'uri',
+    ], NULL);
+    $form_state->setValue([
+      'field_header_component',
+      0,
+      'subform',
+      'field_submenu_footer_sublink',
+      0,
+      'title',
+    ], NULL);
+  }
+}
+
+/**
+ * Validates Listing Grid variations.
+ *
+ * @param $element
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ */
+function smc_api_listing_grid_validate(&$form, FormStateInterface $form_state) {
+  $form_values = $form_state->getValues();
+  $field_paragraph_components = $form_values['field_paragraph_components'];
+
+  foreach ($field_paragraph_components as $key => $value) {
+    if (is_numeric($key)) {
+      $field_grid_type = $field_paragraph_components[$key]['subform']['field_grid_type'][0]['value'] ?? '';
+
+      switch ($field_grid_type) {
+        case '1-column-carousel':
+          $field_jackpot = $field_paragraph_components[$key]['subform']['field_jackpot_widget'][0]['subform']['field_title'][0]['value'] ?? '';
+          $field_jackpot_source = $field_paragraph_components[$key]['subform']['field_jackpot_widget'][0]['subform']['field_jackpot_source'][0]['value'] ?? '';
+          if ($field_jackpot) {
+            $form_state->setErrorByName("field_paragraph_components][$key][subform][field_jackpot_widget][0][subform][field_title",
+            t('Jackpot title field must not be filled.'));
+          }
+
+          if ($field_jackpot_source) {
+            $field_jackpot_amount = $field_paragraph_components[$key]['subform']['field_jackpot_widget'][0]['subform']['field_jackpot_amount'][0]['value'] ?? '';
+            smc_api_validate_jackpot(
+              $form_state,
+              $key,
+              $field_jackpot_source,
+              TRUE,
+              $field_jackpot_amount
+            );
+          }
+          break;
+
+        case '2-column-carousel':
+        case '2-column-carousel-with-tabs':
+          $form_state->setValue(['field_paragraph_components', $key, 'subform', 'field_content_theme', 0, 'value'], 'light');
+          $field_contents = $field_paragraph_components[$key]['subform']['field_content_tabs'] ?? [];
+          $field_grid_type_options = $form['field_paragraph_components']['widget'][$key]['subform']['field_grid_type']['widget']['#options'] ?? [];
+          $grid_type_label = $field_grid_type_options[$field_grid_type] ?? '';
+          foreach ($field_contents as $content_key => $content_value) {
+            if (is_numeric($content_key)) {
+              $field_contents_values = $field_contents[$content_key]['subform']['field_contents'];
+              if (count(array_filter(array_column($field_contents_values, 'target_id'))) > 2) {
+                $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_tabs][$content_key][subform][field_contents",
+                t('Maximum 2 content items are allowed for ":type"', [':type' => $grid_type_label]));
+              }
+            }
+          }
+          break;
+
+        case '2-column-grid':
+          $field_contents = $field_paragraph_components[$key]['subform']['field_content_tabs'][0]['subform']['field_contents'] ?? [];
+          if (count(array_filter(array_column($field_contents, 'target_id'))) > 2) {
+            $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_tabs][0][subform][field_contents",
+            t('Maximum 2 content items are allowed for 2-Column Grid.'));
+          }
+          break;
+
+        case '3-column-grid':
+          $field_content_type = $field_paragraph_components[$key]['subform']['field_content_type'][0]['value'] ?? '';
+          if (!$field_content_type) {
+            $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_type",
+            t('Content Type is required.'));
+          }
+          else {
+            $field_filters = array_column($field_paragraph_components[$key]['subform']['field_filters'], 'value');
+            if (!empty($field_filters)) {
+              $filter_map = [
+                'event' => ['event_type', 'venue', 'date'],
+                'game' => ['game_type'],
+                'promotion' => ['promotion_type', 'date'],
+                'venue' => ['venue_type'],
+                'winner' => ['game_type', 'game', 'date'],
+              ];
+              $filter_diff = array_diff($field_filters, $filter_map[$field_content_type]);
+              if (!empty($filter_diff)) {
+                $field_filters_options = $form['field_paragraph_components']['widget'][$key]['subform']['field_filters']['widget']['#options'] ?? [];
+                $field_conten_type_options = $form['field_paragraph_components']['widget'][$key]['subform']['field_content_type']['widget']['#options'] ?? [];
+                $content_type_label = $field_conten_type_options[$field_content_type] ?? '';
+                $filter_label = array_intersect_key($field_filters_options, array_flip($filter_diff));
+                $place_holders = [':filters' => implode(', ', $filter_label), ':content_type' => $content_type_label];
+                $form_state->setErrorByName("field_paragraph_components][$key][subform][field_filters",
+                t('The selected Filters ":filters" are not allowed for the content type ":content_type".', $place_holders));
+              }
+            }
+          }
+          break;
+
+        case '3-column-grid-with-tabs':
+        case '3-column-grid-with-optional-image':
+          $field_contents = $field_paragraph_components[$key]['subform']['field_content_tabs'] ?? [];
+          $field_grid_type_options = $form['field_paragraph_components']['widget'][$key]['subform']['field_grid_type']['widget']['#options'] ?? [];
+          $grid_type_label = $field_grid_type_options[$field_grid_type] ?? '';
+          foreach ($field_contents as $content_key => $content_value) {
+            if (is_numeric($content_key)) {
+              $field_contents_values = $field_contents[$content_key]['subform']['field_contents'];
+              if (count(array_filter(array_column($field_contents_values, 'target_id'))) > 3) {
+                $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_tabs][$content_key][subform][field_contents",
+                t('Maximum 3 content items are allowed for ":type"', [':type' => $grid_type_label]));
+              }
+            }
+          }
+          break;
+      }
+
+      switch ($field_grid_type) {
+        case '1-column-listing':
+        case '1-column-carousel':
+        case '2-column-carousel':
+        case '2-column-grid':
+        case '3-column-grid-with-optional-image':
+          $field_grid_type_options = $form['field_paragraph_components']['widget'][$key]['subform']['field_grid_type']['widget']['#options'] ?? [];
+          $grid_type_label = $field_grid_type_options[$field_grid_type] ?? '';
+          $field_tabs = $field_paragraph_components[$key]['subform']['field_content_tabs'] ?? [];
+
+          // Show error if only tab is allowed.
+          if (count($field_tabs) > 2) {
+            $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_tabs",
+            t('Multiple Tabs are not allowed for the selected grid type ":type", please remove extra tabs.', [':type' => $grid_type_label]));
+          }
+
+          // Show error if tab name is not allowed.
+          foreach ($field_tabs as $tab_key => $tab_form) {
+            if (is_numeric($tab_key)) {
+              if (!empty($tab_form['subform']['field_tab'][0]['target_id'])) {
+                $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_tabs][$tab_key][subform][field_tab",
+                t('Tab field should be empty for the selected grid type ":type".', [':type' => $grid_type_label]));
+              }
+            }
+          }
+          break;
+      }
+
+      switch ($field_grid_type) {
+        case '2-column-carousel-with-tabs':
+        case '3-column-grid-with-tabs':
+          $field_grid_type_options = $form['field_paragraph_components']['widget'][$key]['subform']['field_grid_type']['widget']['#options'] ?? [];
+          $grid_type_label = $field_grid_type_options[$field_grid_type] ?? '';
+          $field_tabs = $field_paragraph_components[$key]['subform']['field_content_tabs'] ?? [];
+
+          // Show error if tab name is empty.
+          foreach ($field_tabs as $tab_key => $tab_form) {
+            if (is_numeric($tab_key)) {
+              if (empty($tab_form['subform']['field_tab'][0]['target_id'])) {
+                $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_tabs][$tab_key][subform][field_tab",
+                t('Tab field should not be empty for the selected grid type ":type".', [':type' => $grid_type_label]));
+              }
+            }
+          }
+          break;
+      }
+
+      // Jackpot Amount to 0 if the Jackpot source is SMC-API.
+      $field_jackpot_source = $field_paragraph_components[$key]['subform']['field_jackpot_source'][0]['value'] ?? '';
+      if ($field_jackpot_source) {
+        $field_jackpot_amount = $field_paragraph_components[$key]['subform']['field_jackpot_amount'][0]['value'] ?? '';
+        smc_api_validate_jackpot($form_state, $key, $field_jackpot_source, FALSE, $field_jackpot_amount);
+      }
+
+      // Show error if not card is added and grid type isn't 3-column grid.
+      if ($field_grid_type && $field_grid_type != '3-column-grid') {
+        $field_tabs = $field_paragraph_components[$key]['subform']['field_content_tabs'] ?? [];
+        $field_contents = $field_paragraph_components[$key]['subform']['field_content_tabs'][0]['subform']['field_contents'] ?? [];
+
+        // Show error if not card is added.
+        if (empty(array_filter(array_column($field_contents, 'target_id')))) {
+          $form_state->setErrorByName("field_paragraph_components][$key][subform][field_content_tabs][0][subform][field_contents",
+          t('Must have at least one card content, please choose a card for this Listing Grid.'));
+        }
+      }
+
+      // Menu component validation.
+      $menu_component = $form['field_paragraph_components']['widget'][$key]['#paragraph_type'] ?? '';
+      if ($menu_component == 'menu') {
+        $location_id = $field_paragraph_components[$key]['subform']['field_location_id'][0]['value'] ?? '';
+        $location_id = trim($location_id);
+        smc_api_validate_menu($form_state, $key, $location_id);
+      }
+
+      // Simple text header validation.
+      $simple_text_header = $form['field_paragraph_components']['widget'][$key]['#paragraph_type'] ?? '';
+      if ($simple_text_header == 'simple_text_header') {
+        $is_social_share = $field_paragraph_components[$key]['subform']['field_show_share']['value'] ?? '';
+        $section_header = $field_paragraph_components[$key]['subform']['field_section_header'][0]['value'] ?? '';
+        $section_details = count($field_paragraph_components[$key]['subform']['field_section_details']) ?? 1;
+        $options = [
+          'is_social_share' => $is_social_share,
+          'section_header' => $section_header,
+          'section_details' => $section_details,
+        ];
+        smc_api_validate_simple_text_header($form_state, $key, $options);
+      }
+
+      // Full Width Background sign in validation.
+      $fwb_component = $form['field_paragraph_components']['widget'][$key]['#paragraph_type'] ?? '';
+      if ($fwb_component == 'full_width_background') {
+        $enabled_signin = $field_paragraph_components[$key]['subform']['field_enable_sign_in'][0]['value'] ?? 0;
+        if ($enabled_signin) {
+          $form_state->setValue([
+            'field_paragraph_components',
+            $key,
+            'subform',
+            'field_sublink_link',
+            0,
+            'uri',
+          ], NULL);
+          $form_state->setValue([
+            'field_paragraph_components',
+            $key,
+            'subform',
+            'field_sublink_link',
+            0,
+            'title',
+          ], NULL);
+        }
+      }
+
+      // Hero sign in validation.
+      $hero_component = $form['field_paragraph_components']['widget'][$key]['#paragraph_type'] ?? '';
+      if ($hero_component == 'hero') {
+        $enabled_signin = $field_paragraph_components[$key]['subform']['field_signin'][0]['subform']['field_enable_sign_in'][0]['value'] ?? 0;
+        $countdown_source = $field_paragraph_components[$key]['subform']['field_countdown_source'][0]['value'] ?? '';
+        $recurring_end_time = $field_paragraph_components[$key]['subform']['field_recurring']['0']['end'] ?? NULL;
+        $options = [
+          'enabled_signin' => $enabled_signin,
+          'countdown_source' => $countdown_source,
+          'recurring_end_time' => $recurring_end_time,
+        ];
+        smc_api_validate_hero($form_state, $key, $options);
+      }
+    }
+  }
+}
+
+/**
+ * Validates Menu's location id.
+ *
+ * @param mixed $form_state
+ *   Form state.
+ * @param int $key
+ *   Page component key.
+ * @param string $location_id
+ *   Menu's location ID.
+ */
+function smc_api_validate_menu($form_state, int $key, string $location_id) {
+  $menu_service = \Drupal::service('smc_api.menu_service_consumer');
+  $body = $menu_service->getMenus($location_id);
+  if (!$body) {
+    $form_state->setErrorByName("field_paragraph_components][$key][subform][field_location_id][0",
+      t('Invalid Location ID provided.'));
+  }
+}
+
+/**
+ * Validates social share with simple text/header component.
+ *
+ * @param mixed $form_state
+ * @param int $key
+ * @param array $options
+ */
+function smc_api_validate_simple_text_header($form_state, int $key, array $options) {
+  if ($options['is_social_share'] == 1) {
+    if (!$options['section_header'] || $options['section_details'] <= 1) {
+      $form_state->setValue(['field_paragraph_components', $key, 'subform', 'field_show_share', 'value'], 0);
+    }
+  }
+}
+
+/**
+ * Validates the Jackpot Widget component.
+ *
+ * @param mixed $form_state
+ * @param int $key
+ * @param string $field_jackpot_source
+ * @param bool $is_listing_grid
+ */
+function smc_api_validate_jackpot(
+  $form_state,
+  int $key,
+  string $field_jackpot_source,
+  bool $is_listing_grid = FALSE,
+  $jackpot_amount = '') {
+  switch ($field_jackpot_source) {
+    case 'smc-api':
+      $form_state->setValue(['field_paragraph_components', $key, 'subform', 'field_jackpot_amount', 0, 'value'], 0);
+      if ($is_listing_grid) {
+        $form_state->setValue([
+          'field_paragraph_components',
+          $key,
+          'subform',
+          'field_jackpot_widget',
+          0,
+          'subform',
+          'field_jackpot_amount',
+          0,
+          'value',
+        ], 0);
+      }
+      break;
+
+    case 'manual':
+      if (!is_numeric($jackpot_amount)) {
+        $form_state->setErrorByName("field_paragraph_components][$key][subform][field_jackpot_amount",
+          t('Jackpot Amount is required.'));
+        if ($is_listing_grid) {
+          $form_state->setErrorByName("field_paragraph_components][$key][subform][field_jackpot_widget][0][subform][field_jackpot_amount",
+            t('Jackpot Amount is required.'));
+        }
+      }
+      break;
+  }
+}
+
+/**
+ *
+ */
+function smc_api_validate_hero($form_state, int $key, array $options) {
+  if ($options['enabled_signin']) {
+    $form_state->setValue([
+      'field_paragraph_components',
+      $key,
+      'subform',
+      'field_signin',
+      0,
+      'subform',
+      'field_sublink_cta',
+      0,
+      'uri',
+    ], NULL);
+    $form_state->setValue([
+      'field_paragraph_components',
+      $key,
+      'subform',
+      'field_signin',
+      0,
+      'subform',
+      'field_sublink_cta',
+      0,
+      'title',
+    ], NULL);
+  }
+
+  if ($options['countdown_source'] == 'recurring') {
+    $form_state->setValue([
+      'field_paragraph_components',
+      $key,
+      'subform',
+      'field_recurring',
+      0,
+      'start',
+    ], $options['recurring_end_time']);
+  }
+}
+
+/**
+ * Implements hook_field_widget_WIDGET_TYPE_form_alter().
+ */
+function smc_api_field_widget_paragraphs_form_alter(&$element, FormStateInterface &$form_state, $context) {
+  /** @var \Drupal\field\Entity\FieldConfig $field_definition */
+  $field_definition = $context['items']->getFieldDefinition();
+  $paragraph_entity_reference_field_name = $field_definition->getName();
+
+  if ($paragraph_entity_reference_field_name == 'field_paragraph_components' ||
+    $paragraph_entity_reference_field_name == 'field_header_component') {
+    /** @see \Drupal\paragraphs\Plugin\Field\FieldWidget\ParagraphsWidget::formElement() */
+    $widget_state = WidgetBase::getWidgetState($element['#field_parents'], $paragraph_entity_reference_field_name, $form_state);
+
+    /** @var \Drupal\paragraphs\Entity\Paragraph $paragraph */
+    $paragraph_instance = $widget_state['paragraphs'][$element['#delta']]['entity'];
+    $paragraph_type = $paragraph_instance->bundle();
+
+    // Determine which paragraph type listing_grid.
+    if ($paragraph_type == 'listing_grid') {
+      $dependee_field_name = 'field_grid_type';
+      $selector = sprintf('select[name="%s[%d][subform][%s]"]', $paragraph_entity_reference_field_name, $element['#delta'], $dependee_field_name);
+      $content_type_selector = sprintf('select[name="%s[%d][subform][%s]"]', $paragraph_entity_reference_field_name, $element['#delta'], 'field_content_type');
+
+      // What fields are shown or not shown for each variation.
+      /** @see @link https://confluence.uhub.biz/display/MIRSANSMC/01+Listing+Grid */
+
+      $element['subform']['field_header']['#states'] = [
+        'invisible' => [
+          $selector => [
+            ['value' => '2-column-carousel'],
+            ['value' => '3-column-grid'],
+          ],
+        ],
+      ];
+
+      $element['subform']['field_background_image']['#states'] = [
+        'visible' => [
+          $selector => [
+            ['value' => '1-column-listing'],
+            ['value' => '2-column-carousel'],
+            ['value' => '2-column-carousel-with-tabs'],
+          ],
+        ],
+      ];
+
+      $element['subform']['field_grid_background_color']['#states'] = [
+        'invisible' => [
+          $selector => [
+            ['value' => '1-column-listing'],
+            ['value' => '2-column-grid'],
+            ['value' => '3-column-grid'],
+            ['value' => '3-column-grid-with-optional-image'],
+          ],
+        ],
+      ];
+
+      $element['subform']['field_cta_link']['#states'] = [
+        'invisible' => [
+          $selector => [
+            ['value' => '2-column-grid'],
+            ['value' => '3-column-grid'],
+            ['value' => '3-column-grid-with-optional-image'],
+            ['value' => '3-column-grid-with-tabs'],
+          ],
+        ],
+      ];
+
+      $element['subform']['field_content_tabs']['#states'] = [
+        'invisible' => [
+          $selector => ['value' => '3-column-grid'],
+        ],
+      ];
+
+      $element['subform']['field_content_type']['#states'] = [
+        'visible' => [
+          $selector => ['value' => '3-column-grid'],
+        ],
+      ];
+
+      $element['subform']['field_content_type']['widget']['#states'] = [
+        'required' => [
+          $selector => ['value' => '3-column-grid'],
+        ],
+      ];
+
+      $element['subform']['field_filters']['#states'] = [
+        'visible' => [
+          $selector => ['value' => '3-column-grid'],
+        ],
+      ];
+
+      $element['subform']['field_content_theme']['#states'] = [
+        'invisible' => [
+          $selector => [
+            ['value' => '1-column-listing'],
+            ['value' => '2-column-carousel'],
+            ['value' => '2-column-carousel-with-tabs'],
+          ],
+        ],
+      ];
+
+      $element['subform']['field_jackpot_widget']['#states'] = [
+        'visible' => [
+          $selector => ['value' => '1-column-carousel'],
+        ],
+      ];
+    }
+
+    if ($paragraph_type == 'featured_media') {
+      $dependee_field_name = 'field_display_media_type';
+
+      foreach ($element['subform']['field_featured_media_items']['widget'] as $key => $value) {
+        if (is_numeric($key)) {
+          $selector = sprintf('select[name="%s[%d][subform][field_featured_media_items][%d][subform][%s]"]',
+          $paragraph_entity_reference_field_name, $element['#delta'], $key, $dependee_field_name);
+
+          $element['subform']['field_featured_media_items']['widget'][$key]['subform']['field_image']['#states'] = [
+            'visible' => [
+              $selector => ['value' => 'image'],
+            ],
+          ];
+
+          $element['subform']['field_featured_media_items']['widget'][$key]['subform']['field_video']['#states'] = [
+            'visible' => [
+              $selector => ['value' => 'video'],
+            ],
+          ];
+        }
+      }
+    }
+
+    if ($paragraph_type == 'hero') {
+      $selector = sprintf('select[name="%s[%d][subform][%s]"]', $paragraph_entity_reference_field_name, $element['#delta'], 'field_type');
+      $show_sidebar_selector = sprintf('select[name="%s[%d][subform][%s]"]', $paragraph_entity_reference_field_name, $element['#delta'], 'field_show_sidebar');
+      $countdown_source = sprintf('select[name="%s[%d][subform][%s]"]',
+        $paragraph_entity_reference_field_name, $element['#delta'], 'field_countdown_source');
+      $enabled_signin = sprintf('input[name="%s[%d][subform][field_signin][0][subform][%s]"]',
+        $paragraph_entity_reference_field_name, $element['#delta'], 'field_enable_sign_in');
+
+      $element['subform']['field_show_sidebar']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'short'],
+        ],
+      ];
+
+      $element['subform']['field_open_table_rid']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'short'],
+          $show_sidebar_selector => ['value' => 'sidebar-widget'],
+        ],
+      ];
+
+      $element['subform']['field_signin']['widget'][0]['subform']['field_sublink_cta']['#states'] = [
+        'disabled' => [
+          $enabled_signin => ['value' => 1],
+        ],
+      ];
+
+      $element['subform']['field_signin']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'short'],
+          $show_sidebar_selector => ['value' => 'signin'],
+        ],
+      ];
+
+      $element['subform']['field_countdown_source']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'short'],
+        ],
+      ];
+
+      $element['subform']['field_multiple_dates']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'short'],
+          $countdown_source => ['value' => 'multiple-dates'],
+        ],
+      ];
+
+      $element['subform']['field_recurring']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'short'],
+          $countdown_source => ['value' => 'recurring'],
+        ],
+      ];
+
+      $element['subform']['field_header']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'short'],
+        ],
+      ];
+
+      $element['subform']['field_cta_link']['#states'] = [
+        'invisible' => [
+          $selector => ['value' => 'short'],
+        ],
+      ];
+    }
+
+    if ($paragraph_type == 'jackpot_widget') {
+      $selector = sprintf('select[name="%s[%d][subform][%s]"]', $paragraph_entity_reference_field_name, $element['#delta'], 'field_jackpot_source');
+
+      $element['subform']['field_jackpot_amount']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'manual'],
+        ],
+      ];
+
+      $element['subform']['field_jackpot_game_id']['#states'] = [
+        'visible' => [
+          $selector => ['value' => 'smc-api'],
+        ],
+      ];
+    }
+
+    if ($paragraph_type == 'header') {
+      $enabled_signin = sprintf('input[name="%s[%d][subform][%s]"]',
+        $paragraph_entity_reference_field_name, $element['#delta'], 'field_enable_sign_in');
+
+      $element['subform']['field_submenu_footer_sublink']['#states'] = [
+        'disabled' => [
+          $enabled_signin => ['value' => 1],
+        ],
+      ];
+    }
+
+    if ($paragraph_type == 'full_width_background') {
+      $enabled_signin = sprintf('input[name="%s[%d][subform][%s]"]',
+        $paragraph_entity_reference_field_name, $element['#delta'], 'field_enable_sign_in');
+
+      $element['subform']['field_sublink_link']['#states'] = [
+        'disabled' => [
+          $enabled_signin => ['value' => 1],
+        ],
+      ];
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_base_field_info_alter().
+ */
+function smc_api_entity_base_field_info_alter(&$fields, EntityTypeInterface $entity_type) {
+  if ($entity_type->id() == 'node') {
+    $fields['is_user_logged_in'] = BaseFieldDefinition::create('boolean')
+      ->setLabel(t('Is User Logged In'))
+      ->setDescription(t('Determines if the user has logged in.'))
+      ->setComputed(TRUE)
+      ->setTranslatable(TRUE)
+      ->setClass(UserLoggedIn::class)
+      ->setTargetEntityTypeId($entity_type->id());
+  }
+}
+
+/**
+ * Implements hook_entity_bundle_field_info().
+ * Got help from https://www.previousnext.com.au/blog/how-create-and-expose-computed-properties-rest-api-drupal-8 article.
+ */
+function smc_api_entity_bundle_field_info(EntityTypeInterface $entity_type, $bundle, array $base_field_definitions) {
+  $fields = [];
+  if ($entity_type->id() === 'paragraph' && $bundle === 'listing_grid') {
+    $filters = [
+      'event_type' => 'Event Type',
+      'game' => 'Game',
+      'game_type' => 'Game Type',
+      'promotion_type' => 'Promotion Type',
+      'venue_type' => 'Venue Type',
+      'venue' => 'Venue',
+    ];
+    foreach ($filters as $field_name => $field_label) {
+      $name = 'field_filter_' . $field_name;
+      $fields[$name] = FieldStorageDefinition::create('string')
+        ->setLabel(t($field_label))
+        ->setDescription(t('This is filter computed property.'))
+        ->setComputed(TRUE)
+        ->setClass(Filters::class)
+        ->setReadOnly(FALSE)
+        ->setInternal(FALSE)
+        ->setDisplayOptions('view', [
+          'label' => 'hidden',
+          'region' => 'hidden',
+          'weight' => -5,
+        ])
+        ->setDisplayOptions('form', [
+          'label' => 'hidden',
+          'region' => 'hidden',
+          'weight' => -5,
+        ])
+        ->setTargetEntityTypeId($entity_type->id())
+        ->setTargetBundle($bundle)
+        ->setName($name)
+        ->setDisplayConfigurable('form', FALSE)
+        ->setDisplayConfigurable('view', FALSE);
+    }
+  }
+
+  if ($entity_type->id() === 'paragraph' && $bundle === 'hero') {
+    $name = 'field_countdown_date';
+    $fields[$name] = FieldStorageDefinition::create('string')
+      ->setLabel(t('Countdown date'))
+      ->setDescription(t('This is countdown date computed property.'))
+      ->setComputed(TRUE)
+      ->setClass(CountdownDate::class)
+      ->setReadOnly(FALSE)
+      ->setInternal(FALSE)
+      ->setDisplayOptions('view', [
+        'label' => 'hidden',
+        'region' => 'hidden',
+        'weight' => -5,
+      ])
+      ->setDisplayOptions('form', [
+        'label' => 'hidden',
+        'region' => 'hidden',
+        'weight' => -5,
+      ])
+      ->setTargetEntityTypeId($entity_type->id())
+      ->setTargetBundle($bundle)
+      ->setName($name)
+      ->setDisplayConfigurable('form', FALSE)
+      ->setDisplayConfigurable('view', FALSE);
+  }
+
+  if ($entity_type->id() === 'paragraph' && $bundle === 'menu') {
+    $fields['field_menus'] = BaseFieldDefinition::create('map')
+      ->setLabel(t('Menus'))
+      ->setDescription(t('This is the menus computed property.'))
+      ->setComputed(TRUE)
+      ->setClass(Menu::class)
+      ->setCardinality(FieldStorageDefinitionInterface::CARDINALITY_UNLIMITED)
+      ->setTargetEntityTypeId($entity_type->id())
+      ->setTargetBundle($bundle);
+  }
+
+  if ($entity_type->id() === 'paragraph' && $bundle === 'header') {
+    $fields['field_signin_form'] = BaseFieldDefinition::create('string')
+      ->setLabel(t('Sign In Form'))
+      ->setDescription(t('This is the signin form computed property.'))
+      ->setComputed(TRUE)
+      ->setClass(SignInForm::class)
+      ->setTargetEntityTypeId($entity_type->id())
+      ->setTargetBundle($bundle);
+  }
+
+  return $fields;
+}
+
+/**
+ * OpenID Connect post authorize hook.
+ *
+ * This hook runs after a user has been authorized and claims have been mapped
+ * to the user's account.
+ *
+ * A popular use case for this hook is to saving token and additional identity
+ * provider related information to the user's Drupal session (private temp
+ * store).
+ *
+ * @param \Drupal\user\UserInterface $account
+ *   User account object of the authorized user.
+ * @param array $context
+ *   An associative array with context information:
+ *   - tokens:         An array of tokens.
+ *   - user_data:      An array of user and session data.
+ *   - userinfo:       An array of user information.
+ *   - plugin_id:      The plugin identifier.
+ *   - sub:            The remote user identifier.
+ *
+ * @ingroup openid_connect_api
+ */
+function smc_api_openid_connect_post_authorize(UserInterface $account, array $context) {
+
+  // \Drupal::logger('smc_api_session')->info(\Drupal::service('session')->getId());
+  // \Drupal::logger('smc_api_session')->info(\Drupal::service('session')->getName());
+  // \Drupal::logger('smc_api_session')->info(print_r(\Drupal::request()->cookies->all(), true));
+  // \Drupal::logger('smc_api_session')->info(print_r($_COOKIE, true));
+  // \Drupal::request()->cookies->set('sess', 'value');
+  // $_COOKIE['sess'] = 'value';
+  // setcookie('TestCookie', \Drupal::service('session')->getName(), time()+3600, "/", ".service-finder.lndo.site", 0, 1);
+}
+
+/**
+ * OpenID Connect pre authorize hook.
+ *
+ * This hook runs before a user is authorized and before any claim mappings
+ * take place.
+ *
+ * Popular use cases for this hook are overriding the user account that shall
+ * be authorized, or checking certain constraints before authorization and
+ * distinctively allowing/denying authorization for the given account.
+ *
+ * @param \Drupal\user\UserInterface|bool $account
+ *   User account identified using the "sub" provided by the identity provider,
+ *   or FALSE, if no such account exists.
+ * @param array $context
+ *   An associative array with context information:
+ *   - tokens:         An array of tokens.
+ *   - user_data:      An array of user and session data.
+ *   - userinfo:       An array of user information.
+ *   - plugin_id:      The plugin identifier.
+ *   - sub:            The remote user identifier.
+ *
+ * @return \Drupal\user\UserInterface|false
+ *   A user account for a certain user to authorize, FALSE, if the user shall
+ *   not be logged in, or TRUE for successful hook execution.
+ *
+ * @ingroup openid_connect_api
+ */
+function smc_api_openid_connect_pre_authorize($account, array $context) {
+  // Allow access only for users with authenticated role.
+  if ($account && count($account->getRoles(TRUE)) > 0) {
+    \Drupal::messenger()->addError(t('Could not login user @email, as users with only authenticated role are allowed to use open id.', ['@email' => $account->getInitialEmail()]), 'error');
+    \Drupal::logger('smc_api_openid_connect')->error('Could not login user @email, as users with only authenticated role are allowed to use open id.', ['@email' => $account->getInitialEmail()]);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+/**
+ * Save userinfo hook.
+ *
+ * This hook runs after the claim mappings have been applied by the OpenID
+ * Connect module, but before the account will be saved.
+ *
+ * A popular use case for this hook is mapping additional information like
+ * user roles or other complex claims provided by the identity provider, that
+ * the OpenID Connect module has no mapping mechanisms for.
+ *
+ * @param \Drupal\user\UserInterface $account
+ *   A user account object.
+ * @param array $context
+ *   An associative array with context information:
+ *   - tokens:         Array of original tokens.
+ *   - user_data:      Array of user and session data from the ID token.
+ *   - userinfo:       Array of user information from the userinfo endpoint.
+ *   - plugin_id:      The plugin identifier.
+ *   - sub:            The remote user identifier.
+ *   - is_new:         Whether the account was created during authorization.
+ *
+ * @ingroup openid_connect_api
+ */
+function smc_api_openid_connect_userinfo_save(UserInterface $account, array $context) {
+  // \Drupal::service('user.data')->delete('openid_connect', $account->id(), 'oidc_name');
+}
